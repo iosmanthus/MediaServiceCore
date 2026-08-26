@@ -765,6 +765,13 @@ public class YouTubeMPDBuilder implements MPDBuilder {
                 continue;
             }
 
+            // NOTE: SABR-only formats carry no url (and no cipher to derive one from).
+            // Writing them out produces a <BaseURL>null</BaseURL> representation that the
+            // player may pick during adaptation and then fail on.
+            if (!item.isOtf() && item.getUrl() == null) {
+                continue;
+            }
+
             result.add(item);
         }
 

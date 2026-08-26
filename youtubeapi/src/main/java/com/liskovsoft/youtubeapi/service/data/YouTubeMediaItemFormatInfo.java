@@ -228,12 +228,57 @@ public class YouTubeMediaItemFormatInfo implements MediaItemFormatInfo {
 
     @Override
     public boolean containsSabrFormats() {
-        return mContainsAdaptiveVideoFormats && (mAdaptiveFormats.get(0).getFormatType() == MediaFormat.FORMAT_TYPE_SABR || mServerAbrStreamingUrl != null);
+        if (!mContainsAdaptiveVideoFormats) {
+            return false;
+        }
+
+        // A SABR stream is playable as soon as the server gave us the ABR endpoint.
+        // Individual formats may still carry legacy urls - that doesn't make SABR unavailable.
+        return mServerAbrStreamingUrl != null || countFormats(MediaFormat.FORMAT_TYPE_SABR, null) > 0;
     }
 
     @Override
     public boolean containsDashFormats() {
-        return mContainsAdaptiveVideoFormats && mAdaptiveFormats.get(0).getFormatType() == MediaFormat.FORMAT_TYPE_DASH;
+        if (!mContainsAdaptiveVideoFormats) {
+            return false;
+        }
+
+        // NOTE: YouTube started to mix legacy (url bearing) and SABR-only formats inside a single
+        // response. Sampling mAdaptiveFormats.get(0) made the transport depend on the list order.
+        // A DASH manifest is only usable when BOTH a video and an audio representation have a url.
+        return countFormats(MediaFormat.FORMAT_TYPE_DASH, "video/") > 0 &&
+               countFormats(MediaFormat.FORMAT_TYPE_DASH, "audio/") > 0;
+    }
+
+    /**
+     * Counts adaptive formats of the given type, optionally restricted to a mime type prefix.
+     */
+    private int countFormats(int formatType, String mimePrefix) {
+        if (mAdaptiveFormats == null) {
+            return 0;
+        }
+
+        int result = 0;
+
+        for (MediaFormat format : mAdaptiveFormats) {
+            if (format == null || format.getFormatType() != formatType) {
+                continue;
+            }
+
+            if (formatType == MediaFormat.FORMAT_TYPE_DASH && format.getUrl() == null && !format.isOtf()) {
+                continue; // deciphering failed - the representation would be written as a null BaseURL
+            }
+
+            String mimeType = format.getMimeType();
+
+            if (mimePrefix != null && (mimeType == null || !mimeType.startsWith(mimePrefix))) {
+                continue;
+            }
+
+            result++;
+        }
+
+        return result;
     }
     
     private boolean containsAdaptiveVideoFormats() {
