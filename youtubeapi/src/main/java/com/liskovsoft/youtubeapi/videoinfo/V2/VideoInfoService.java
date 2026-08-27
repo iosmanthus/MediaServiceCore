@@ -162,6 +162,25 @@ public class VideoInfoService extends VideoInfoServiceBase {
         do {
             VideoInfo result = getVideoInfoWithRentFix(nextType, videoId, clickTrackingParams);
 
+            // Every attempt, not just the winner. Which client finally answered
+            // says nothing about why the preferred ones did not, and that is
+            // the only question worth asking when playback lands somewhere it
+            // should not have. The token is reported by length: whether one was
+            // carried is the interesting part, its value is a credential.
+            if (com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.isEnabled()) {
+                String pot = com.liskovsoft.youtubeapi.app.PoTokenGate.getPoToken(nextType, videoId);
+                com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report("client_attempt",
+                        "client", nextType.name(),
+                        "cookie_auth", nextType.isCookieAuthSupported()
+                                && com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled(),
+                        "pot_len", pot == null ? 0 : pot.length(),
+                        "result", result == null ? "no_response"
+                                : (result.isUnplayable() ? "unplayable" : "playable"),
+                        "status", result == null ? "null" : String.valueOf(result.getPlayabilityStatus()),
+                        "adaptive", result == null || result.getAdaptiveFormats() == null
+                                ? 0 : result.getAdaptiveFormats().size());
+            }
+
             if (result != null && infoTester.test(result)) {
                 return result;
             }
