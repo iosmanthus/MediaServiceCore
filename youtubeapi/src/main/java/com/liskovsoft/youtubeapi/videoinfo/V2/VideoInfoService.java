@@ -93,6 +93,8 @@ public class VideoInfoService extends VideoInfoServiceBase {
 
         mAuthBlock = true;
 
+        long t0 = System.currentTimeMillis();
+
         VideoInfo result = firstPlayable(videoId, clickTrackingParams);
 
         if (result == null) {
@@ -100,9 +102,27 @@ public class VideoInfoService extends VideoInfoServiceBase {
             return null;
         }
 
+        long t1 = System.currentTimeMillis();
+
         applyFixesIfNeeded(result, videoId, clickTrackingParams);
 
+        long t2 = System.currentTimeMillis();
+
         transformFormats(result);
+
+        long t3 = System.currentTimeMillis();
+
+        // Where the time between pressing play and the first frame actually goes.
+        // Measured as three stages because they fail differently: the fetch is
+        // network, the fixes are *extra* round trips the response asked for, and
+        // the transform is signature work done on the device.
+        com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report("video_info_timing",
+                "fetch_ms", t1 - t0,
+                "fixes_ms", t2 - t1,
+                "transform_ms", t3 - t2,
+                "hls_extra", shouldObtainExtendedFormats(result) || result.isStoryboardBroken(),
+                "subs_extra", needMoreSubtitles(result),
+                "formats", result.getAdaptiveFormats() == null ? 0 : result.getAdaptiveFormats().size());
 
         persistRecentTypeIfNeeded(result);
 
