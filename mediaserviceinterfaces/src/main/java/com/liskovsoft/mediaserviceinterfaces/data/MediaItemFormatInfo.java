@@ -64,6 +64,15 @@ public interface MediaItemFormatInfo extends FormatInfoProvision {
     ClientInfo getClientInfo();
 
     interface ClientInfo {
+        /**
+         * Which client this actually was, as opposed to what it called itself.
+         *
+         * Several clients share one InnerTube name -- the cookie-authorized web
+         * client reports itself as WEB, exactly like the anonymous one -- so
+         * getClientName() cannot tell them apart, and a log that only has the
+         * name cannot answer "was this request authorized?".
+         */
+        String getClientTag();
         String getClientName();
         String getClientVersion();
         String getOsName();

@@ -90,6 +90,7 @@ internal enum class AppClient(
         userAgent ?: baseClient.userAgent, baseClient.referer, baseClient.clientScreen, baseClient.params,
         postData ?: baseClient.postData, postDataBrowse ?: baseClient.postDataBrowse)
 
+    override fun getClientTag() = name
     override fun getClientName() = clientName
     override fun getClientVersion() = clientVersion
     override fun getOsName() = "Macintosh" // TODO: change later
