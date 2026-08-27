@@ -33,6 +33,12 @@ public class VideoInfoService extends VideoInfoServiceBase {
     private final static AppClient[] VIDEO_INFO_TYPE_LIST = {
             AppClient.WEB_EMBED, // Restricted (18+) videos
             AppClient.VISIONOS, // no url formats
+            // NOTE: try the signed-in web context before falling back to the tv clients.
+            // googlevideo refuses media urls minted for TVHTML5 (403 on every chunk), so reaching
+            // a tv client means playback is already lost. A browser stays playable because it is
+            // WEB *and* authorized - these two reproduce that. See yuliskov/SmartTube#6030.
+            AppClient.WEB_EMBED_AUTH,
+            AppClient.WEB_AUTH,
             AppClient.TV_DOWNGRADED, // probably unplayable (weird potoken format?)
             AppClient.TV, // Supports auth. Fixes "please sign in" bug! (the best for Premium users)
             //AppClient.ANDROID_REEL, // doesn't require pot and cipher (hangs on all engines)
@@ -134,11 +140,36 @@ public class VideoInfoService extends VideoInfoServiceBase {
 
     private VideoInfo firstInfoWith(String videoId, String clickTrackingParams, InfoTester infoTester) {
         //final AppClient beginType = getDefaultClient();
-        final AppClient beginType = mNextInfoType != null ? mNextInfoType : VIDEO_INFO_TYPE_LIST[0];
+        // With cookies on hand the authorized web client is the one that actually yields
+        // playable urls here, so start there instead of grinding through the whole chain.
+        // NOTE: the preference has to beat mNextInfoType, not lose to it. That field remembers
+        // whichever client was reached last, so a single earlier failure would pin the walk to a
+        // tv client forever - exactly the clients whose urls do not work here.
+        AppClient preferred = com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled()
+                ? AppClient.WEB_AUTH : null;
+        final AppClient beginType = preferred != null ? preferred
+                : (mNextInfoType != null ? mNextInfoType : VIDEO_INFO_TYPE_LIST[0]);
         AppClient nextType = beginType;
 
         do {
             VideoInfo result = getVideoInfoWithRentFix(nextType, videoId, clickTrackingParams);
+
+            // DIAG ONLY (yuliskov/SmartTube#6030): emitted at INFO because some vendor roms drop
+            // DEBUG, which hid every failed client attempt and left only the winner visible.
+            try {
+                String pot = com.liskovsoft.youtubeapi.app.PoTokenGate.getPoToken(nextType, videoId);
+                android.util.Log.i("DIAG6030", "try client=" + nextType
+                        + " auth=" + (nextType.isAuthSupported() && mAuthBlock)
+                        + " potReq=" + nextType.isWebPotRequired()
+                        + " pot=" + (pot == null ? "null" : "len" + pot.length())
+                        + " -> " + (result == null ? "NO RESPONSE"
+                            : ("status=" + result.getPlayabilityStatus()
+                               + " unplayable=" + result.isUnplayable()
+                               + " adaptive=" + (result.getAdaptiveFormats() == null ? 0 : result.getAdaptiveFormats().size())
+                               + " sabrUrl=" + (result.getUrlHolder() != null && result.getUrlHolder().getUrl() != null))));
+            } catch (Throwable e) {
+                android.util.Log.i("DIAG6030", "try client=" + nextType + " log failed: " + e);
+            }
 
             if (result != null && infoTester.test(result)) {
                 return result;
@@ -219,16 +250,28 @@ public class VideoInfoService extends VideoInfoServiceBase {
 
     private VideoInfo getVideoInfo(AppClient client, String videoInfoQuery) {
         boolean auth = client.isAuthSupported() && mAuthBlock;
+        // The web clients cannot use the tv oauth token; they authorize with cookies instead.
+        boolean cookieAuth = client.isCookieAuthSupported() && mAuthBlock
+                && com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled();
 
-        if (client.isReelClient()) {
-            Call<VideoInfoReel> wrapper = mVideoInfoApi.getVideoInfoReel(videoInfoQuery, mAppService.getVisitorData(),
+        com.liskovsoft.googlecommon.common.helpers.RetrofitOkHttpHelper.setCookieAuth(cookieAuth);
+
+        try {
+            if (client.isReelClient()) {
+                Call<VideoInfoReel> wrapper = mVideoInfoApi.getVideoInfoReel(videoInfoQuery, mAppService.getVisitorData(),
+                        client.getUserAgent(), client.getInnerTubeName(), client.getClientVersion());
+                return getVideoInfoReel(wrapper, auth || cookieAuth);
+            }
+
+            // Same reason as the body field: our visitorData belongs to a different session
+            // than the cookies, and sending it gets the request rejected.
+            String visitorId = cookieAuth ? null : mAppService.getVisitorData();
+            Call<VideoInfo> wrapper = mVideoInfoApi.getVideoInfo(videoInfoQuery, visitorId,
                     client.getUserAgent(), client.getInnerTubeName(), client.getClientVersion());
-            return getVideoInfoReel(wrapper, auth);
+            return getVideoInfo(wrapper, auth || cookieAuth);
+        } finally {
+            com.liskovsoft.googlecommon.common.helpers.RetrofitOkHttpHelper.setCookieAuth(false);
         }
-
-        Call<VideoInfo> wrapper = mVideoInfoApi.getVideoInfo(videoInfoQuery, mAppService.getVisitorData(),
-                client.getUserAgent(), client.getInnerTubeName(), client.getClientVersion());
-        return getVideoInfo(wrapper, auth);
     }
 
     private @Nullable VideoInfo getVideoInfo(Call<VideoInfo> wrapper, boolean auth) {

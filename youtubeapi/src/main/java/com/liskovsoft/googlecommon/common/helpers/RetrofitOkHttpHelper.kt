@@ -13,6 +13,9 @@ import okhttp3.Request
 
 internal object RetrofitOkHttpHelper {
     private val authSkipList = mutableListOf<Request>()
+    // NOTE: request identity is unreliable here - upstream interceptors may rebuild the object
+    // before ours sees it - so flag the calling thread instead.
+    private val cookieAuthThread = ThreadLocal<Boolean>()
 
     @JvmStatic
     val authHeaders = mutableMapOf<String, String>()
@@ -27,6 +30,12 @@ internal object RetrofitOkHttpHelper {
     fun addAuthSkip(request: Request) {
         if (!authSkipList.contains(request))
             authSkipList.add(request)
+    }
+
+    /** Authorize calls made on this thread the way a signed-in browser does. See CookieAuthStore. */
+    @JvmStatic
+    fun setCookieAuth(enabled: Boolean) {
+        cookieAuthThread.set(if (enabled) true else null)
     }
 
     private val commonHeaders = mapOf(
@@ -84,14 +93,25 @@ internal object RetrofitOkHttpHelper {
                 val doSkipAuth = authSkipList.remove(request)
 
                 // Empty Home fix (anonymous user) and improve Recommendations for everyone
-                if (visitorApiSuffixes.any { url.contains(it) })
+                // Under cookie auth the browser session owns the visitorData; injecting ours
+                // gets the request rejected. See yuliskov/SmartTube#6030.
+                if (visitorApiSuffixes.any { url.contains(it) } &&
+                        !(cookieAuthThread.get() == true && com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled()))
                     headers["X-Goog-Visitor-Id"] ?: AppService.instance().visitorData?.let { requestBuilder.header("X-Goog-Visitor-Id", it) }
 
                 applyHeaders(this.apiHeaders, headers, requestBuilder)
 
                 val tParam = if (tParamSuffixes.any { url.contains(it) }) YouTubeHelper.generateTParameter() else null
 
-                if (authHeaders.isEmpty() || doSkipAuth) {
+                val useCookieAuth = cookieAuthThread.get() == true &&
+                        com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled()
+                android.util.Log.i("DIAG6030", "http auth: cookieAuth=" + useCookieAuth
+                        + " skip=" + doSkipAuth + " url=" + url.takeLast(40))
+
+                if (useCookieAuth) {
+                    applyQueryKeys(mapOf("prettyPrint" to "false", "t" to tParam), request, requestBuilder)
+                    applyHeaders(com.liskovsoft.youtubeapi.app.CookieAuthStore.authHeaders(), headers, requestBuilder)
+                } else if (authHeaders.isEmpty() || doSkipAuth) {
                     applyQueryKeys(mapOf("key" to AppConstants.API_KEY, "prettyPrint" to "false", "t" to tParam),
                         request, requestBuilder)
                 } else {

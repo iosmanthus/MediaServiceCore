@@ -2,6 +2,7 @@ package com.liskovsoft.youtubeapi.common.helpers
 
 import com.liskovsoft.sharedutils.helpers.Helpers
 import com.liskovsoft.youtubeapi.app.AppService
+import com.liskovsoft.youtubeapi.app.CookieAuthStore
 import com.liskovsoft.googlecommon.common.locale.LocaleManager
 import com.liskovsoft.youtubeapi.innertube.ytcfg.YtCfgService
 
@@ -62,7 +63,11 @@ internal class QueryBuilder(private val client: AppClient) {
             utcOffsetMinutes = localeManager.utcOffsetMinutes
 
         if (playerDataCheck() || browseDataCheck()) {
-            if (visitorData == null)
+            // NOTE: with cookie auth the session is the browser's, and its visitorData is not
+            // ours. Sending our own makes the server reject the request outright ("content
+            // unavailable"); omitting it lets the cookies define the session.
+            // See yuliskov/SmartTube#6030.
+            if (visitorData == null && !(client.isCookieAuthSupported && CookieAuthStore.isEnabled()))
                 visitorData = appService.visitorData
         }
 

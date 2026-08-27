@@ -72,6 +72,16 @@ internal enum class AppClient(
         userAgent = CLIENTS.IOS.USER_AGENT!!, referer = null, postData = String.format(POST_DATA_IOS_MODEL, CLIENTS.IOS.DEVICE_MODEL, CLIENTS.IOS.OS_VERSION)),
     VISIONOS(CLIENTS.VISIONOS.NAME, CLIENTS.VISIONOS.VERSION, CLIENT_NAME_IDS[CLIENTS.VISIONOS.NAME],
         userAgent = CLIENTS.VISIONOS.USER_AGENT!!, referer = null, postData = String.format(POST_DATA_IOS_MODEL, CLIENTS.VISIONOS.DEVICE_MODEL, CLIENTS.VISIONOS.OS_VERSION)),
+    // On an egress where googlevideo demands a po token, the tv clients cannot
+    // produce a playable url: PoTokenGate mints tokens only for the web family,
+    // so a tv-minted url goes out with pot=null and comes back 403 on every
+    // chunk. The web clients that do get a token cannot use the tv oauth flow.
+    //
+    // A browser has both at once, because it talks to InnerTube as WEB while
+    // signed in, using cookies rather than a bearer token. These two mirror
+    // that. See yuliskov/SmartTube#6030.
+    WEB_AUTH(WEB),
+    WEB_EMBED_AUTH(WEB_EMBED),
     INITIAL(WEB),
     GEO(WEB);
 
@@ -108,7 +118,16 @@ internal enum class AppClient(
         (postDataBrowser ?: "") + (postData ?: "")) }
 
     val isAuthSupported by lazy { Helpers.equalsAny(this, TV, TV_LEGACY, TV_EMBED, TV_KIDS, TV_DOWNGRADED) } // NOTE: TV_SIMPLY doesn't support auth
-    val isWebPotRequired by lazy { Helpers.equalsAny(this, WEB, MWEB, WEB_EMBED, WEB_SAFARI, INITIAL, GEO) }
+
+    /**
+     * These authorize with a browser's cookies plus a SAPISIDHASH, not with the
+     * tv oauth bearer token. See yuliskov/SmartTube#6030.
+     */
+    val isCookieAuthSupported by lazy { Helpers.equalsAny(this, WEB_AUTH, WEB_EMBED_AUTH) }
+
+    // The two new clients belong here as well: carrying a po token is the whole
+    // point of keeping them in the web context.
+    val isWebPotRequired by lazy { Helpers.equalsAny(this, WEB, MWEB, WEB_EMBED, WEB_SAFARI, INITIAL, GEO, WEB_AUTH, WEB_EMBED_AUTH) }
     // TODO: remove after implement SABR
     val isPlaybackBroken by lazy { Helpers.equalsAny(this, INITIAL, WEB, WEB_CREATOR, WEB_MUSIC, WEB_SAFARI, ANDROID_VR, GEO, MWEB, WEB_EMBED, TV_EMBED, IOS) }
     val isReelClient by lazy { Helpers.equalsAny(this, ANDROID_REEL) }
