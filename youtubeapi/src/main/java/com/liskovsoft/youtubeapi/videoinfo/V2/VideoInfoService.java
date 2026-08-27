@@ -34,9 +34,17 @@ public class VideoInfoService extends VideoInfoServiceBase {
             AppClient.WEB_EMBED, // Restricted (18+) videos
             AppClient.VISIONOS, // no url formats
             // NOTE: try the signed-in web context before falling back to the tv clients.
-            // googlevideo refuses media urls minted for TVHTML5 (403 on every chunk), so reaching
-            // a tv client means playback is already lost. A browser stays playable because it is
-            // WEB *and* authorized - these two reproduce that. See yuliskov/SmartTube#6030.
+            //
+            // On an egress where googlevideo demands a po token, a tv client cannot produce a
+            // playable url: PoTokenGate mints tokens only for the web family, so every tv-minted
+            // url goes out with pot=null and comes back 403 on every chunk. Measured on a device
+            // where an *authorized* TV_DOWNGRADED request with a correct n parameter and pot=null
+            // still 403s, while a web client carrying a token does not.
+            //
+            // The web clients that do get a token cannot use the tv oauth flow, so anonymously
+            // they either fail the bot check or are handed an ad-laden SABR stream the player
+            // cannot consume. A browser escapes both because it is WEB *and* signed in; these two
+            // clients reproduce that by authorizing with cookies. See yuliskov/SmartTube#6030.
             AppClient.WEB_EMBED_AUTH,
             AppClient.WEB_AUTH,
             AppClient.TV_DOWNGRADED, // probably unplayable (weird potoken format?)
@@ -153,23 +161,6 @@ public class VideoInfoService extends VideoInfoServiceBase {
 
         do {
             VideoInfo result = getVideoInfoWithRentFix(nextType, videoId, clickTrackingParams);
-
-            // DIAG ONLY (yuliskov/SmartTube#6030): emitted at INFO because some vendor roms drop
-            // DEBUG, which hid every failed client attempt and left only the winner visible.
-            try {
-                String pot = com.liskovsoft.youtubeapi.app.PoTokenGate.getPoToken(nextType, videoId);
-                android.util.Log.i("DIAG6030", "try client=" + nextType
-                        + " auth=" + (nextType.isAuthSupported() && mAuthBlock)
-                        + " potReq=" + nextType.isWebPotRequired()
-                        + " pot=" + (pot == null ? "null" : "len" + pot.length())
-                        + " -> " + (result == null ? "NO RESPONSE"
-                            : ("status=" + result.getPlayabilityStatus()
-                               + " unplayable=" + result.isUnplayable()
-                               + " adaptive=" + (result.getAdaptiveFormats() == null ? 0 : result.getAdaptiveFormats().size())
-                               + " sabrUrl=" + (result.getUrlHolder() != null && result.getUrlHolder().getUrl() != null))));
-            } catch (Throwable e) {
-                android.util.Log.i("DIAG6030", "try client=" + nextType + " log failed: " + e);
-            }
 
             if (result != null && infoTester.test(result)) {
                 return result;
