@@ -137,9 +137,63 @@ public class VideoInfoService extends VideoInfoServiceBase {
     }
 
     private VideoInfo firstPlayable(String videoId, String clickTrackingParams) {
+        // With cookies on hand the authorized web clients are the only ones that can
+        // produce a playable url on an egress where googlevideo demands a po token, so
+        // this deliberately does not walk. Falling through to a tv client returns a
+        // response that claims to be playable and then 403s on every chunk -- and
+        // firstInfoWith() would accept it, because "not unplayable" is all it checks.
+        // An honest failure is better: the player reports it, and the next attempt has
+        // a real chance instead of settling on something that cannot work.
+        if (com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled()) {
+            return retryCookieAuth(videoId, clickTrackingParams);
+        }
+
         VideoInfo result = firstInfoWith(videoId, clickTrackingParams, info -> !info.isUnplayable());
 
         return result != null ? result : firstInfoWith(videoId, clickTrackingParams, info -> info.getRegularFormats() != null);
+    }
+
+    /**
+     * How many times to go round the authorized web clients before giving up.
+     *
+     * Failures here are intermittent rather than sticky -- the same video and the
+     * same cookies were observed refused and then accepted a minute apart -- so a
+     * couple of retries are worth more than a longer client list. Kept small
+     * because the player is waiting on this.
+     */
+    private static final int COOKIE_AUTH_ROUNDS = 3;
+    private static final long COOKIE_AUTH_RETRY_MS = 700;
+
+    private VideoInfo retryCookieAuth(String videoId, String clickTrackingParams) {
+        AppClient[] clients = { AppClient.WEB_AUTH, AppClient.WEB_EMBED_AUTH };
+
+        for (int round = 0; round < COOKIE_AUTH_ROUNDS; round++) {
+            for (AppClient client : clients) {
+                VideoInfo result = getVideoInfoWithRentFix(client, videoId, clickTrackingParams);
+
+                reportClientAttempt(client, videoId, result, round);
+
+                if (result != null && !result.isUnplayable()) {
+                    return result;
+                }
+            }
+
+            if (round + 1 < COOKIE_AUTH_ROUNDS) {
+                // Drop the po token between rounds. It is the part of the request
+                // most likely to be stale, and minting another is cheap next to
+                // the video not playing at all.
+                PoTokenGate.resetCache(AppClient.WEB_AUTH);
+
+                try {
+                    Thread.sleep(COOKIE_AUTH_RETRY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                }
+            }
+        }
+
+        return null;
     }
 
     private interface InfoTester {
@@ -162,24 +216,7 @@ public class VideoInfoService extends VideoInfoServiceBase {
         do {
             VideoInfo result = getVideoInfoWithRentFix(nextType, videoId, clickTrackingParams);
 
-            // Every attempt, not just the winner. Which client finally answered
-            // says nothing about why the preferred ones did not, and that is
-            // the only question worth asking when playback lands somewhere it
-            // should not have. The token is reported by length: whether one was
-            // carried is the interesting part, its value is a credential.
-            if (com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.isEnabled()) {
-                String pot = com.liskovsoft.youtubeapi.app.PoTokenGate.getPoToken(nextType, videoId);
-                com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report("client_attempt",
-                        "client", nextType.name(),
-                        "cookie_auth", nextType.isCookieAuthSupported()
-                                && com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled(),
-                        "pot_len", pot == null ? 0 : pot.length(),
-                        "result", result == null ? "no_response"
-                                : (result.isUnplayable() ? "unplayable" : "playable"),
-                        "status", result == null ? "null" : String.valueOf(result.getPlayabilityStatus()),
-                        "adaptive", result == null || result.getAdaptiveFormats() == null
-                                ? 0 : result.getAdaptiveFormats().size());
-            }
+            reportClientAttempt(nextType, videoId, result, -1);
 
             if (result != null && infoTester.test(result)) {
                 return result;
@@ -228,6 +265,36 @@ public class VideoInfoService extends VideoInfoServiceBase {
 
     private void nextVideoInfoType() {
         mNextInfoType = Helpers.getNextValue(VIDEO_INFO_TYPE_LIST, mActualInfoType);
+    }
+
+    /**
+     * Every attempt, not just the winner.
+     *
+     * Which client finally answered says nothing about why the preferred ones did
+     * not, and that is the only question worth asking when playback lands on a
+     * client it should not have reached. The token is reported by length: whether
+     * one was carried is the interesting part, its value is a credential.
+     *
+     * @param round retry round for the cookie-auth path, or -1 when walking.
+     */
+    private void reportClientAttempt(AppClient client, String videoId, VideoInfo result, int round) {
+        if (!com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.isEnabled()) {
+            return;
+        }
+
+        String pot = PoTokenGate.getPoToken(client, videoId);
+
+        com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report("client_attempt",
+                "client", client.name(),
+                "cookie_auth", client.isCookieAuthSupported()
+                        && com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled(),
+                "round", round,
+                "pot_len", pot == null ? 0 : pot.length(),
+                "result", result == null ? "no_response"
+                        : (result.isUnplayable() ? "unplayable" : "playable"),
+                "status", result == null ? "null" : String.valueOf(result.getPlayabilityStatus()),
+                "adaptive", result == null || result.getAdaptiveFormats() == null
+                        ? 0 : result.getAdaptiveFormats().size());
     }
 
     private VideoInfo getVideoInfoWithRentFix(AppClient client, String videoId, String clickTrackingParams) {
