@@ -181,10 +181,33 @@ public class VideoInfoService extends VideoInfoServiceBase {
      * couple of retries are worth more than a longer client list. Kept small
      * because the player is waiting on this.
      */
-    private static final int COOKIE_AUTH_ROUNDS = 3;
+    private static final int COOKIE_AUTH_ROUNDS = 2;
     private static final long COOKIE_AUTH_RETRY_MS = 700;
 
+    /**
+     * How long to refuse to try again after a whole run has failed.
+     *
+     * Returning nothing makes the caller ask again about a second later, so
+     * without this the rounds below become a sustained two requests a second
+     * for as long as the video stays selected -- and that rate is itself enough
+     * to get the session refused as a bot, which then produces more retries.
+     * Observed on the device: six requests every three seconds, indefinitely,
+     * every one of them answered "please sign in to confirm you are not a bot"
+     * while the same cookies worked fine from elsewhere.
+     */
+    private static final long COOKIE_AUTH_COOLDOWN_MS = 30_000;
+
+    private static long sCookieAuthCooldownUntil;
+
     private VideoInfo retryCookieAuth(String videoId, String clickTrackingParams) {
+        long now = System.currentTimeMillis();
+
+        if (now < sCookieAuthCooldownUntil) {
+            com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report(
+                    "cookie_auth_cooldown", "remaining_ms", sCookieAuthCooldownUntil - now);
+            return null;
+        }
+
         AppClient[] clients = { AppClient.WEB_AUTH, AppClient.WEB_EMBED_AUTH };
 
         for (int round = 0; round < COOKIE_AUTH_ROUNDS; round++) {
@@ -194,6 +217,7 @@ public class VideoInfoService extends VideoInfoServiceBase {
                 reportClientAttempt(client, videoId, result, round);
 
                 if (result != null && !result.isUnplayable()) {
+                    sCookieAuthCooldownUntil = 0;
                     return result;
                 }
             }
@@ -212,6 +236,8 @@ public class VideoInfoService extends VideoInfoServiceBase {
                 }
             }
         }
+
+        sCookieAuthCooldownUntil = System.currentTimeMillis() + COOKIE_AUTH_COOLDOWN_MS;
 
         return null;
     }
