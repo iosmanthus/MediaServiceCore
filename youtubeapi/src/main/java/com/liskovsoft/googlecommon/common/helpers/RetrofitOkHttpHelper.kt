@@ -105,9 +105,6 @@ internal object RetrofitOkHttpHelper {
 
                 val useCookieAuth = cookieAuthThread.get() == true &&
                         com.liskovsoft.youtubeapi.app.CookieAuthStore.isEnabled()
-                android.util.Log.i("DIAG6030", "http auth: cookieAuth=" + useCookieAuth
-                        + " skip=" + doSkipAuth + " url=" + url.takeLast(40))
-
                 if (useCookieAuth) {
                     applyQueryKeys(mapOf("prettyPrint" to "false", "t" to tParam), request, requestBuilder)
                     applyHeaders(com.liskovsoft.youtubeapi.app.CookieAuthStore.authHeaders(), headers, requestBuilder)
