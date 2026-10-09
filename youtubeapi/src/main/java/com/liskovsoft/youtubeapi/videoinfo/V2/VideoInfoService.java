@@ -199,18 +199,36 @@ public class VideoInfoService extends VideoInfoServiceBase {
 
     private static long sCookieAuthCooldownUntil;
 
+    /**
+     * Which cookies the run that started the cooldown used.
+     *
+     * The cooldown keeps the device from asking again with cookies that were just
+     * refused. Cookies that have changed since are a different question, and
+     * waiting them out only keeps a video from playing that now would.
+     */
+    private static int sCookieAuthCooldownGeneration;
+
     private VideoInfo retryCookieAuth(String videoId, String clickTrackingParams) {
         long now = System.currentTimeMillis();
+        int generation = com.liskovsoft.youtubeapi.app.CookieAuthStore.getGeneration();
 
         if (now < sCookieAuthCooldownUntil) {
+            if (generation == sCookieAuthCooldownGeneration) {
+                com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report(
+                        "cookie_auth_cooldown", "remaining_ms", sCookieAuthCooldownUntil - now);
+                return null;
+            }
+
             com.liskovsoft.mediaserviceinterfaces.diagnostics.ApiDiagnostics.report(
-                    "cookie_auth_cooldown", "remaining_ms", sCookieAuthCooldownUntil - now);
-            return null;
+                    "cookie_auth_cooldown_lifted", "remaining_ms", sCookieAuthCooldownUntil - now);
+            sCookieAuthCooldownUntil = 0;
         }
 
         AppClient[] clients = { AppClient.WEB_AUTH, AppClient.WEB_EMBED_AUTH };
 
         for (int round = 0; round < COOKIE_AUTH_ROUNDS; round++) {
+            generation = com.liskovsoft.youtubeapi.app.CookieAuthStore.getGeneration();
+
             for (AppClient client : clients) {
                 VideoInfo result = getVideoInfoWithRentFix(client, videoId, clickTrackingParams);
 
@@ -220,6 +238,14 @@ public class VideoInfoService extends VideoInfoServiceBase {
                     sCookieAuthCooldownUntil = 0;
                     return result;
                 }
+            }
+
+            if (round == 0) {
+                // The cookies may have gone stale while the device slept: the
+                // session rotated on without it. Fetching a new set from the
+                // cookie service takes well under the pause below, so the next
+                // round can already use it.
+                com.liskovsoft.youtubeapi.app.CookieAuthStore.requestRefresh("playback_refused");
             }
 
             if (round + 1 < COOKIE_AUTH_ROUNDS) {
@@ -238,6 +264,8 @@ public class VideoInfoService extends VideoInfoServiceBase {
         }
 
         sCookieAuthCooldownUntil = System.currentTimeMillis() + COOKIE_AUTH_COOLDOWN_MS;
+        // The cookies the last round used: a set that arrived after it has not been refused.
+        sCookieAuthCooldownGeneration = generation;
 
         return null;
     }

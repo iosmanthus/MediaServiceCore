@@ -1,6 +1,8 @@
 package com.liskovsoft.youtubeapi.app
 
 import java.security.MessageDigest
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * Browser-style InnerTube authorization.
@@ -19,13 +21,48 @@ object CookieAuthStore {
     @Volatile
     private var cookieHeader: String? = null
 
+    @Volatile
+    private var generation = 0
+
+    /** At most one pending request: a second one asks for nothing the first does not. */
+    private val refreshRequests = ArrayBlockingQueue<String>(1)
+
     @JvmStatic
     fun setCookies(cookies: String?) {
-        cookieHeader = cookies?.trim()?.takeIf { it.isNotEmpty() }
+        val header = cookies?.trim()?.takeIf { it.isNotEmpty() }
+        if (header != cookieHeader) {
+            generation++
+        }
+        cookieHeader = header
     }
 
     @JvmStatic
     fun getCookies(): String? = cookieHeader
+
+    /**
+     * Changes whenever the cookies do, so a caller that saw one set refused can tell
+     * a fresh set from the same one again.
+     */
+    @JvmStatic
+    fun getGeneration(): Int = generation
+
+    /**
+     * Ask the cookie loader to fetch now instead of on its schedule.
+     *
+     * The session rotates as the holder browses, so cookies that are refused are
+     * most likely just old: a device that slept for hours wakes up with the cookies
+     * from before it slept.
+     */
+    @JvmStatic
+    fun requestRefresh(reason: String) {
+        refreshRequests.offer(reason)
+    }
+
+    /** For the cookie loader: the reason of a [requestRefresh], or null after [timeoutMs]. */
+    @JvmStatic
+    @Throws(InterruptedException::class)
+    fun awaitRefreshRequest(timeoutMs: Long): String? =
+        refreshRequests.poll(timeoutMs, TimeUnit.MILLISECONDS)
 
     @JvmStatic
     fun isEnabled(): Boolean = sapisid() != null
